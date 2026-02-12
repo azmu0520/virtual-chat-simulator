@@ -6,25 +6,34 @@ const VIDEO_SOURCES: Record<VideoState, string> = {
   idle: "/videos/idle.mp4",
   greeting: "/videos/greeting.mp4",
   listening: "/videos/listening.mp4",
-  response: "/videos/listening.mp4",
+  response: "/videos/general_response.mp4",
   weather: "/videos/weather.mp4",
   goodbye: "/videos/goodbye.mp4",
+  fallback: "/videos/fallback.mp4",
+  prompt: "/videos/prompt.mp4",
 };
 
-// ============================================
-// FALLBACK CONFIGURATION - EDIT HERE
-// ============================================
 const VIDEO_FALLBACKS: Partial<Record<VideoState, VideoState>> = {
-  response: "listening", // ← If response.mp4 fails, use listening.mp4
-  weather: "listening", // ← If weather.mp4 fails, use listening.mp4
-  goodbye: "idle", // ← If goodbye.mp4 fails, use idle.mp4
+  response: "listening",
+  weather: "listening",
+  goodbye: "idle",
 };
-// ============================================
 
 const LOOPING_STATES: VideoState[] = ["idle", "listening"];
 
+// 🔧 States where character is speaking (has audio)
+const SPEAKING_STATES: VideoState[] = [
+  "greeting",
+  "response",
+  "weather",
+  "goodbye",
+  "fallback",
+  "prompt",
+];
+
 export const VideoPlayer = () => {
-  const { currentState, setState, resetChat, isActive } = useChatStore();
+  const { currentState, setState, resetChat, isActive, setCharacterSpeaking } =
+    useChatStore();
   const [isLoaded, setIsLoaded] = useState(false);
   const [loadedCount, setLoadedCount] = useState(0);
   const [failedVideos, setFailedVideos] = useState<Set<VideoState>>(new Set());
@@ -36,6 +45,8 @@ export const VideoPlayer = () => {
     listening: null,
     response: null,
     weather: null,
+    fallback: null,
+    prompt: null,
     goodbye: null,
   });
 
@@ -47,7 +58,7 @@ export const VideoPlayer = () => {
     if (loadedVideos.current.has(state)) return;
 
     loadedVideos.current.add(state);
-    console.log(`✓ Video loaded: ${state} (${loadedVideos.current.size}/6)`);
+    console.log(`✓ Video loaded: ${state} (${loadedVideos.current.size}/8)`);
 
     setLoadedCount(loadedVideos.current.size);
 
@@ -97,7 +108,7 @@ export const VideoPlayer = () => {
     const timeout = setTimeout(() => {
       if (!isLoaded) {
         console.warn(
-          `⚠ Timeout: Only ${loadedCount}/6 videos loaded. Proceeding...`,
+          `⚠ Timeout: Only ${loadedCount}/8 videos loaded. Proceeding...`,
         );
         setIsLoaded(true);
       }
@@ -108,15 +119,33 @@ export const VideoPlayer = () => {
 
   // Get the effective video state (with fallback if needed)
   const getEffectiveState = (state: VideoState): VideoState => {
-    // ============================================
-    // FALLBACK LOGIC - This handles missing videos
-    // ============================================
-    if (failedVideos.has(state) && VIDEO_FALLBACKS[state]) {
-      console.log(`Using fallback for ${state}: ${VIDEO_FALLBACKS[state]}`);
-      return VIDEO_FALLBACKS[state]!; // ← Returns "listening" if response fails
+    const visited = new Set<VideoState>();
+    let current = state;
+
+    while (failedVideos.has(current) && VIDEO_FALLBACKS[current]) {
+      if (visited.has(current)) {
+        console.warn(`Fallback loop detected for ${state}, using 'idle'`);
+        return "idle";
+      }
+      visited.add(current);
+      current = VIDEO_FALLBACKS[current]!;
     }
-    return state;
+    return current;
   };
+
+  // 🔧 KEY FIX: Detect when character is speaking based on current state
+  useEffect(() => {
+    const effectiveState = getEffectiveState(currentState);
+    const isSpeaking = SPEAKING_STATES.includes(effectiveState);
+
+    if (isSpeaking) {
+      console.log("🔊 Character speaking:", effectiveState);
+      setCharacterSpeaking(true);
+    } else {
+      console.log("🔇 Character silent:", effectiveState);
+      setCharacterSpeaking(false);
+    }
+  }, [currentState, setCharacterSpeaking, failedVideos]);
 
   // Handle video state changes
   useEffect(() => {
@@ -144,8 +173,10 @@ export const VideoPlayer = () => {
     });
   }, [currentState, isActive, isLoaded, failedVideos]);
 
-  // Handle video end events
+  // 🔧 ENHANCED: Handle video end events + stop speaking
   const handleVideoEnd = (state: VideoState) => {
+    console.log("⏹️ Video ended:", state);
+
     switch (state) {
       case "greeting":
         setState("listening");
@@ -157,8 +188,11 @@ export const VideoPlayer = () => {
       case "goodbye":
         setTimeout(() => {
           resetChat();
-          setState("idle");
         }, 500);
+        break;
+      case "prompt":
+      case "fallback":
+        setState("listening");
         break;
     }
   };
@@ -188,11 +222,18 @@ export const VideoPlayer = () => {
             videoRefs.current[state] = el;
           }}
           src={VIDEO_SOURCES[state]}
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
+          className={`absolute inset-0 w-full h-full object-cover ${
             getEffectiveState(currentState) === state
               ? "opacity-100 z-10"
               : "opacity-0 z-0"
           }`}
+          style={{
+            transition:
+              getEffectiveState(currentState) === state
+                ? "opacity 50ms ease-in"
+                : "opacity 400ms ease-out",
+            willChange: "opacity",
+          }}
           loop={LOOPING_STATES.includes(state)}
           preload="auto"
           playsInline
@@ -220,10 +261,14 @@ export const VideoPlayer = () => {
         </div>
       </div>
 
-      {/* Error indicator */}
       {failedVideos.size > 0 && (
-        <div className="absolute top-4 right-4 bg-red-500/20 backdrop-blur px-3 py-2 rounded-lg text-xs font-mono z-20">
-          ⚠ {failedVideos.size} video(s) failed to load
+        <div className="absolute top-4 right-4 bg-red-500/20 backdrop-blur px-3 py-2 rounded-lg text-xs font-mono z-20 group">
+          ⚠ {failedVideos.size} video(s) failed
+          <div className="absolute right-0 mt-1 hidden group-hover:block bg-black/90 text-white p-2 rounded text-xs whitespace-nowrap">
+            {Array.from(failedVideos).map((v) => (
+              <div key={v}>• {v}.mp4</div>
+            ))}
+          </div>
         </div>
       )}
     </div>

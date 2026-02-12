@@ -1,6 +1,9 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useChatStore } from "../store/chatStore";
 
+// ============================================
+// TYPES (from Web Speech API)
+// ============================================
 interface SpeechRecognitionEvent extends Event {
   results: SpeechRecognitionResultList;
   resultIndex: number;
@@ -41,25 +44,60 @@ declare global {
   }
 }
 
-const SILENCE_TIMEOUT = 8000;
+// ============================================
+// CONSTANTS
+// ============================================
+const SILENCE_TIMEOUT = 8000; // 8 seconds of silence triggers prompt
+const RESTART_DELAY = 500; // Delay before restarting recognition
+const LISTEN_COOLDOWN = 1500; // 🔧 INCREASED: Wait longer after character stops speaking
 
+// ============================================
+// HOOK
+// ============================================
 export const useSpeechRecognition = () => {
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isRunningRef = useRef(false); // ← Track if recognition is actually running
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const listenStartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const isRunningRef = useRef(false);
 
-  const { isActive, currentState, setState, addTranscript, setListening } =
-    useChatStore();
+  // 🔧 FIX: Get isCharacterSpeaking from store
+  const {
+    isActive,
+    currentState,
+    setState,
+    addTranscript,
+    setListening,
+    isCharacterSpeaking,
+  } = useChatStore();
 
+  // ------------------------------------------------------------
+  // 🔧 FIX: Should only listen when character is NOT speaking
+  // ------------------------------------------------------------
+  const shouldBeListening = useCallback(() => {
+    return (
+      (currentState === "listening" || currentState === "prompt") &&
+      isActive &&
+      !isCharacterSpeaking // 🚫 Don't listen while character speaks
+    );
+  }, [currentState, isActive, isCharacterSpeaking]);
+
+  // ------------------------------------------------------------
+  // Process a recognized speech transcript
+  // ------------------------------------------------------------
   const processSpeech = useCallback(
     (transcript: string) => {
       const text = transcript.toLowerCase().trim();
 
+      // ✅ Legitimate user speech – add to transcript
       addTranscript({
         speaker: "user",
         text: transcript,
       });
 
+      // Simple keyword matching (could be replaced with NLP)
       if (text.includes("hello") || text.includes("hi")) {
         setState("greeting");
         addTranscript({
@@ -86,15 +124,94 @@ export const useSpeechRecognition = () => {
         });
       }
 
+      // --------------------------------------------------------
+      // 🔁 RESTART SILENCE TIMER after a successful utterance
+      // --------------------------------------------------------
+      if (shouldBeListening()) {
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+        }
+        silenceTimerRef.current = setTimeout(() => {
+          setState("prompt");
+          addTranscript({
+            speaker: "character",
+            text: "Are you still there?",
+          });
+        }, SILENCE_TIMEOUT);
+      }
+    },
+    [setState, addTranscript, shouldBeListening],
+  );
+
+  // ------------------------------------------------------------
+  // Start speech recognition
+  // ------------------------------------------------------------
+  const startRecognition = useCallback(() => {
+    if (!recognitionRef.current || isRunningRef.current) return;
+
+    try {
+      recognitionRef.current.start();
+      isRunningRef.current = true;
+      setListening(true);
+      console.log("🎤 Microphone STARTED");
+
+      // Clear any existing silence timer before setting a new one
       if (silenceTimerRef.current) {
         clearTimeout(silenceTimerRef.current);
         silenceTimerRef.current = null;
       }
-    },
-    [setState, addTranscript],
-  );
 
-  // Initialize speech recognition once
+      // Start the silence timer
+      silenceTimerRef.current = setTimeout(() => {
+        setState("prompt");
+        addTranscript({
+          speaker: "character",
+          text: "Are you still there?",
+        });
+      }, SILENCE_TIMEOUT);
+    } catch (e: any) {
+      console.error("Failed to start recognition:", e.message);
+      isRunningRef.current = false;
+      setListening(false);
+
+      // ⚠️ Clear any pending silence timer on failure
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
+    }
+  }, [setListening, setState, addTranscript]);
+
+  // ------------------------------------------------------------
+  // Stop speech recognition
+  // ------------------------------------------------------------
+  const stopRecognition = useCallback(() => {
+    if (!recognitionRef.current || !isRunningRef.current) return;
+
+    try {
+      recognitionRef.current.stop();
+      isRunningRef.current = false;
+      setListening(false);
+      console.log("🔇 Microphone STOPPED");
+
+      // Clear all timers
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
+      if (restartTimerRef.current) {
+        clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = null;
+      }
+    } catch (e: any) {
+      console.error("Failed to stop recognition:", e.message);
+    }
+  }, [setListening]);
+
+  // ------------------------------------------------------------
+  // Initialize SpeechRecognition once
+  // ------------------------------------------------------------
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -102,7 +219,7 @@ export const useSpeechRecognition = () => {
       window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      console.error("Speech recognition not supported");
+      console.error("❌ Speech recognition not supported");
       return;
     }
 
@@ -113,32 +230,37 @@ export const useSpeechRecognition = () => {
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       const transcript = event.results[0][0].transcript;
-      console.log("Recognized:", transcript);
+      console.log("🎤 Recognized:", transcript);
       processSpeech(transcript);
     };
 
     recognition.onerror = (event: any) => {
       console.error("Speech recognition error:", event.error);
-      isRunningRef.current = false;
-      setListening(false);
+      setState("fallback");
+      addTranscript({
+        speaker: "character",
+        text: "I didn't catch that...",
+      });
     };
 
     recognition.onend = () => {
-      console.log("Recognition ended");
+      console.log("⏹️ Recognition ended");
       isRunningRef.current = false;
       setListening(false);
 
-      // Auto-restart if still in listening state
-      if (currentState === "listening" && isActive) {
-        setTimeout(() => {
-          if (
-            currentState === "listening" &&
-            isActive &&
-            !isRunningRef.current
-          ) {
+      // Clear any existing restart timer
+      if (restartTimerRef.current) {
+        clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = null;
+      }
+
+      // Auto‑restart if still should be listening
+      if (shouldBeListening()) {
+        restartTimerRef.current = setTimeout(() => {
+          if (shouldBeListening() && !isRunningRef.current) {
             startRecognition();
           }
-        }, 100);
+        }, RESTART_DELAY);
       }
     };
 
@@ -152,75 +274,78 @@ export const useSpeechRecognition = () => {
           // Ignore
         }
       }
-      if (silenceTimerRef.current) {
-        clearTimeout(silenceTimerRef.current);
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+      if (listenStartTimerRef.current)
+        clearTimeout(listenStartTimerRef.current);
+    };
+  }, [
+    processSpeech,
+    shouldBeListening,
+    setListening,
+    setState,
+    addTranscript,
+    startRecognition,
+  ]);
+
+  // ------------------------------------------------------------
+  // 🔧 FIX: React to state changes AND character speaking status
+  // Automatically mute mic when character speaks
+  // ------------------------------------------------------------
+  useEffect(() => {
+    const should = shouldBeListening();
+
+    // 🛑 Cancel any pending listen-start timer
+    if (listenStartTimerRef.current) {
+      clearTimeout(listenStartTimerRef.current);
+      listenStartTimerRef.current = null;
+    }
+
+    if (should && !isRunningRef.current) {
+      // ⏱️ Cooldown: wait a bit before turning mic on
+      console.log("⏳ Waiting before starting mic...");
+      listenStartTimerRef.current = setTimeout(() => {
+        // Re-check conditions – may have changed during cooldown
+        if (shouldBeListening() && !isRunningRef.current) {
+          startRecognition();
+        }
+      }, LISTEN_COOLDOWN);
+    } else if (!should && isRunningRef.current) {
+      console.log("🔇 Character speaking - stopping mic");
+      stopRecognition();
+    }
+
+    return () => {
+      if (listenStartTimerRef.current) {
+        clearTimeout(listenStartTimerRef.current);
+        listenStartTimerRef.current = null;
       }
     };
-  }, [processSpeech, currentState, isActive, setListening]);
+  }, [shouldBeListening, startRecognition, stopRecognition]);
 
-  // Helper function to start recognition safely
-  const startRecognition = useCallback(() => {
-    if (!recognitionRef.current || isRunningRef.current) {
-      return;
-    }
-
-    try {
-      console.log("Starting recognition...");
-      recognitionRef.current.start();
-      isRunningRef.current = true;
-      setListening(true);
-
-      // Set silence timer
-      if (silenceTimerRef.current) {
-        clearTimeout(silenceTimerRef.current);
-      }
-
-      silenceTimerRef.current = setTimeout(() => {
-        console.log("Silence timeout");
-        setState("response");
-        addTranscript({
-          speaker: "character",
-          text: "Are you still there?",
-        });
-      }, SILENCE_TIMEOUT);
-    } catch (e: any) {
-      console.error("Failed to start recognition:", e.message);
-      isRunningRef.current = false;
-      setListening(false);
-    }
-  }, [setListening, setState, addTranscript]);
-
-  // Helper function to stop recognition safely
-  const stopRecognition = useCallback(() => {
-    if (!recognitionRef.current || !isRunningRef.current) {
-      return;
-    }
-
-    try {
-      console.log("Stopping recognition...");
-      recognitionRef.current.stop();
-      isRunningRef.current = false;
-      setListening(false);
-
+  // ------------------------------------------------------------
+  // Clean up all timers when chat becomes inactive
+  // ------------------------------------------------------------
+  useEffect(() => {
+    if (!isActive) {
       if (silenceTimerRef.current) {
         clearTimeout(silenceTimerRef.current);
         silenceTimerRef.current = null;
       }
-    } catch (e: any) {
-      console.error("Failed to stop recognition:", e.message);
+      if (restartTimerRef.current) {
+        clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = null;
+      }
+      if (listenStartTimerRef.current) {
+        clearTimeout(listenStartTimerRef.current);
+        listenStartTimerRef.current = null;
+      }
+      // Ensure recognition is fully stopped
+      if (isRunningRef.current) {
+        stopRecognition();
+      }
     }
-  }, [setListening]);
-
-  // Handle state changes
-  useEffect(() => {
-    const shouldBeListening = currentState === "listening" && isActive;
-
-    if (shouldBeListening && !isRunningRef.current) {
-      startRecognition();
-    } else if (!shouldBeListening && isRunningRef.current) {
-      stopRecognition();
-    }
-  }, [currentState, isActive, startRecognition, stopRecognition]);
+  }, [isActive, stopRecognition]);
 
   return { isListening: isRunningRef.current };
 };

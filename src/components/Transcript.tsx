@@ -37,6 +37,14 @@ export const Transcript = () => {
           ))}
         </AnimatePresence>
       </div>
+      {!isActive && transcript.length > 0 && (
+        <button
+          onClick={() => useChatStore.getState().resetChat()}
+          className="mt-2 text-xs text-gray-400 hover:text-white"
+        >
+          Clear conversation
+        </button>
+      )}
     </div>
   );
 };

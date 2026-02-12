@@ -4,6 +4,8 @@ export type VideoState =
   | "listening"
   | "response"
   | "weather"
+  | "fallback"
+  | "prompt"
   | "goodbye";
 
 export interface TranscriptEntry {
@@ -19,4 +21,5 @@ export interface ChatState {
   transcript: TranscriptEntry[];
   isListening: boolean;
   silenceTimer: number | null;
+  isCharacterSpeaking: boolean;
 }

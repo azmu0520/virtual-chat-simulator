@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { VideoState, TranscriptEntry, ChatState } from "../types";
-
+import { v4 as uuidv4 } from "uuid";
+const generateUniqueId = () => uuidv4();
 interface ChatActions {
   setState: (state: VideoState) => void;
   startChat: () => void;
@@ -9,6 +10,7 @@ interface ChatActions {
   setListening: (listening: boolean) => void;
   setSilenceTimer: (timer: number | null) => void;
   resetChat: () => void;
+  setCharacterSpeaking: (speaking: boolean) => void;
 }
 
 const initialState: ChatState = {
@@ -17,17 +19,8 @@ const initialState: ChatState = {
   transcript: [],
   isListening: false,
   silenceTimer: null,
+  isCharacterSpeaking: false,
 };
-
-// ============================================
-// UNIQUE ID GENERATOR - FIX FOR DUPLICATE KEYS
-// ============================================
-let idCounter = 0;
-const generateUniqueId = () => {
-  idCounter += 1;
-  return `${Date.now()}-${idCounter}`;
-};
-// ============================================
 
 export const useChatStore = create<ChatState & ChatActions>((set) => ({
   ...initialState,
@@ -44,6 +37,7 @@ export const useChatStore = create<ChatState & ChatActions>((set) => ({
     set({
       isActive: false,
       currentState: "goodbye",
+      silenceTimer: null,
     }),
 
   addTranscript: (entry) =>
@@ -52,7 +46,7 @@ export const useChatStore = create<ChatState & ChatActions>((set) => ({
         ...state.transcript,
         {
           ...entry,
-          id: generateUniqueId(), // ← Use unique ID generator
+          id: generateUniqueId(),
           timestamp: new Date(),
         },
       ],
@@ -62,8 +56,9 @@ export const useChatStore = create<ChatState & ChatActions>((set) => ({
 
   setSilenceTimer: (timer) => set({ silenceTimer: timer }),
 
+  setCharacterSpeaking: (speaking) => set({ isCharacterSpeaking: speaking }),
+
   resetChat: () => {
-    idCounter = 0; // ← Reset counter when chat resets
     return set(initialState);
   },
 }));
