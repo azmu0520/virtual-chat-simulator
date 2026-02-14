@@ -49,7 +49,7 @@ declare global {
 // ============================================
 const SILENCE_TIMEOUT = 8000; // 8 seconds of silence triggers prompt
 const RESTART_DELAY = 500; // Delay before restarting recognition
-const LISTEN_COOLDOWN = 1500; // 🔧 INCREASED: Wait longer after character stops speaking
+const LISTEN_COOLDOWN = 300; // 🔧 REDUCED: Quick restart for natural conversation
 
 // ============================================
 // HOOK
@@ -63,7 +63,6 @@ export const useSpeechRecognition = () => {
   );
   const isRunningRef = useRef(false);
 
-  // 🔧 FIX: Get isCharacterSpeaking from store
   const {
     isActive,
     currentState,
@@ -74,14 +73,19 @@ export const useSpeechRecognition = () => {
   } = useChatStore();
 
   // ------------------------------------------------------------
-  // 🔧 FIX: Should only listen when character is NOT speaking
+  // 🔧 UPDATED: Allow listening during most states except greeting/goodbye
   // ------------------------------------------------------------
   const shouldBeListening = useCallback(() => {
-    return (
-      (currentState === "listening" || currentState === "prompt") &&
+    const should =
+      (currentState === "listening" ||
+        currentState === "prompt" ||
+        currentState === "response" || // ✅ Allow during responses
+        currentState === "weather" || // ✅ Allow during weather
+        currentState === "fallback") && // ✅ Allow during fallback
       isActive &&
-      !isCharacterSpeaking // 🚫 Don't listen while character speaks
-    );
+      !isCharacterSpeaking;
+
+    return should;
   }, [currentState, isActive, isCharacterSpeaking]);
 
   // ------------------------------------------------------------
@@ -91,13 +95,13 @@ export const useSpeechRecognition = () => {
     (transcript: string) => {
       const text = transcript.toLowerCase().trim();
 
-      // ✅ Legitimate user speech – add to transcript
+      // ✅ Add to transcript
       addTranscript({
         speaker: "user",
         text: transcript,
       });
 
-      // Simple keyword matching (could be replaced with NLP)
+      // Simple keyword matching
       if (text.includes("hello") || text.includes("hi")) {
         setState("greeting");
         addTranscript({
@@ -124,9 +128,7 @@ export const useSpeechRecognition = () => {
         });
       }
 
-      // --------------------------------------------------------
-      // 🔁 RESTART SILENCE TIMER after a successful utterance
-      // --------------------------------------------------------
+      // Restart silence timer
       if (shouldBeListening()) {
         if (silenceTimerRef.current) {
           clearTimeout(silenceTimerRef.current);
@@ -141,28 +143,35 @@ export const useSpeechRecognition = () => {
         }, SILENCE_TIMEOUT);
       }
     },
-    [setState, addTranscript, shouldBeListening],
+    [
+      setState,
+      addTranscript,
+      shouldBeListening,
+      isCharacterSpeaking,
+      currentState,
+    ],
   );
 
   // ------------------------------------------------------------
   // Start speech recognition
   // ------------------------------------------------------------
   const startRecognition = useCallback(() => {
-    if (!recognitionRef.current || isRunningRef.current) return;
+    if (!recognitionRef.current || isRunningRef.current) {
+      return;
+    }
 
     try {
       recognitionRef.current.start();
       isRunningRef.current = true;
       setListening(true);
-      console.log("🎤 Microphone STARTED");
 
-      // Clear any existing silence timer before setting a new one
+      // Clear any existing silence timer
       if (silenceTimerRef.current) {
         clearTimeout(silenceTimerRef.current);
         silenceTimerRef.current = null;
       }
 
-      // Start the silence timer
+      // Start silence timer
       silenceTimerRef.current = setTimeout(() => {
         setState("prompt");
         addTranscript({
@@ -171,11 +180,10 @@ export const useSpeechRecognition = () => {
         });
       }, SILENCE_TIMEOUT);
     } catch (e: any) {
-      console.error("Failed to start recognition:", e.message);
+      console.error("❌ Failed to start recognition:", e.message);
       isRunningRef.current = false;
       setListening(false);
 
-      // ⚠️ Clear any pending silence timer on failure
       if (silenceTimerRef.current) {
         clearTimeout(silenceTimerRef.current);
         silenceTimerRef.current = null;
@@ -187,13 +195,14 @@ export const useSpeechRecognition = () => {
   // Stop speech recognition
   // ------------------------------------------------------------
   const stopRecognition = useCallback(() => {
-    if (!recognitionRef.current || !isRunningRef.current) return;
+    if (!recognitionRef.current || !isRunningRef.current) {
+      return;
+    }
 
     try {
       recognitionRef.current.stop();
       isRunningRef.current = false;
       setListening(false);
-      console.log("🔇 Microphone STOPPED");
 
       // Clear all timers
       if (silenceTimerRef.current) {
@@ -205,7 +214,7 @@ export const useSpeechRecognition = () => {
         restartTimerRef.current = null;
       }
     } catch (e: any) {
-      console.error("Failed to stop recognition:", e.message);
+      console.error("❌ Failed to stop recognition:", e.message);
     }
   }, [setListening]);
 
@@ -230,12 +239,12 @@ export const useSpeechRecognition = () => {
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       const transcript = event.results[0][0].transcript;
-      console.log("🎤 Recognized:", transcript);
+
       processSpeech(transcript);
     };
 
     recognition.onerror = (event: any) => {
-      console.error("Speech recognition error:", event.error);
+      console.error("❌ Speech recognition error:", event.error);
       setState("fallback");
       addTranscript({
         speaker: "character",
@@ -244,23 +253,13 @@ export const useSpeechRecognition = () => {
     };
 
     recognition.onend = () => {
-      console.log("⏹️ Recognition ended");
       isRunningRef.current = false;
       setListening(false);
 
-      // Clear any existing restart timer
+      // Clear restart timer
       if (restartTimerRef.current) {
         clearTimeout(restartTimerRef.current);
         restartTimerRef.current = null;
-      }
-
-      // Auto‑restart if still should be listening
-      if (shouldBeListening()) {
-        restartTimerRef.current = setTimeout(() => {
-          if (shouldBeListening() && !isRunningRef.current) {
-            startRecognition();
-          }
-        }, RESTART_DELAY);
       }
     };
 
@@ -286,32 +285,28 @@ export const useSpeechRecognition = () => {
     setState,
     addTranscript,
     startRecognition,
+    isCharacterSpeaking,
   ]);
 
   // ------------------------------------------------------------
-  // 🔧 FIX: React to state changes AND character speaking status
-  // Automatically mute mic when character speaks
+  // 🔧 MAIN CONTROL: React to state changes AND character speaking status
   // ------------------------------------------------------------
   useEffect(() => {
     const should = shouldBeListening();
 
-    // 🛑 Cancel any pending listen-start timer
+    // Cancel pending timer
     if (listenStartTimerRef.current) {
       clearTimeout(listenStartTimerRef.current);
       listenStartTimerRef.current = null;
     }
 
     if (should && !isRunningRef.current) {
-      // ⏱️ Cooldown: wait a bit before turning mic on
-      console.log("⏳ Waiting before starting mic...");
       listenStartTimerRef.current = setTimeout(() => {
-        // Re-check conditions – may have changed during cooldown
         if (shouldBeListening() && !isRunningRef.current) {
           startRecognition();
         }
       }, LISTEN_COOLDOWN);
     } else if (!should && isRunningRef.current) {
-      console.log("🔇 Character speaking - stopping mic");
       stopRecognition();
     }
 
@@ -321,10 +316,17 @@ export const useSpeechRecognition = () => {
         listenStartTimerRef.current = null;
       }
     };
-  }, [shouldBeListening, startRecognition, stopRecognition]);
+  }, [
+    shouldBeListening,
+    startRecognition,
+    stopRecognition,
+    currentState,
+    isCharacterSpeaking,
+    isActive,
+  ]);
 
   // ------------------------------------------------------------
-  // Clean up all timers when chat becomes inactive
+  // Clean up when inactive
   // ------------------------------------------------------------
   useEffect(() => {
     if (!isActive) {
@@ -340,7 +342,6 @@ export const useSpeechRecognition = () => {
         clearTimeout(listenStartTimerRef.current);
         listenStartTimerRef.current = null;
       }
-      // Ensure recognition is fully stopped
       if (isRunningRef.current) {
         stopRecognition();
       }

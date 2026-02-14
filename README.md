@@ -2,10 +2,6 @@
 
 A web app that simulates a video conversation with an anime character. The character responds to your voice using pre-recorded videos and browser speech recognition.
 
-## Demo
-
-Demo video: [Coming soon]
-
 ## What it does
 
 The app plays different videos based on what you say:
@@ -83,8 +79,7 @@ src/
 │   ├── MicVisualizer.tsx        # Pulsing mic animation
 │   └── Transcript.tsx           # Shows conversation history
 ├── hooks/
-│   ├── useSpeechRecognition.ts  # Handles speech API
-│   └── useVideoStateMachine.ts  # Manages state transitions
+│   └── useSpeechRecognition.ts  # Handles speech API
 ├── store/
 │   └── chatStore.ts             # Global state (Zustand)
 └── types/
@@ -130,6 +125,8 @@ For keyword matching, I just check if the text contains certain words:
 - "goodbye" → goodbye video
 - anything else → general response
 
+The microphone automatically turns off while the character is speaking to prevent audio feedback, then turns back on when they're done.
+
 ### State Management
 
 The app flows through these states:
@@ -146,7 +143,10 @@ I used Zustand to manage the current state because it's way simpler than Redux f
 At first there was a brief black screen when switching videos. I fixed this by preloading all videos on page load and using CSS opacity transitions instead of showing/hiding the elements.
 
 **Speech recognition stopping randomly**
-The Web Speech API sometimes stops listening for no reason. I added a timeout that restarts it automatically, and if there's no speech for 8 seconds it plays a "are you still there?" video.
+The Web Speech API sometimes stops listening for no reason. I added logic that restarts it automatically, and if there's no speech for 8 seconds it plays a "are you still there?" video.
+
+**Audio feedback loop**
+The microphone was picking up the character's voice from the speakers. I solved this by only allowing the mic to be active during the "listening" state, and turning it off when the character speaks.
 
 **Mobile permissions**
 iOS Safari is really strict about autoplay and microphone access. Had to make sure the "Start Chat" button triggers everything so it counts as a user interaction.
@@ -162,6 +162,7 @@ If I had more time, I'd add:
 - Save conversation history to localStorage
 - Support for other languages
 - Let users customize which keywords trigger which responses
+- Lower video volume option to reduce audio feedback risk
 - Maybe integrate actual AI instead of pre-recorded responses
 
 ## Known Issues
@@ -170,13 +171,4 @@ If I had more time, I'd add:
 - Need good internet connection (speech API uses Google's servers)
 - Background noise can mess with keyword detection
 - All videos load at once, so initial page load takes a few seconds
-
-## Time Spent
-
-- Setup and video system: ~8 hours
-- Speech recognition: ~4 hours
-- UI and polish: ~3 hours
-- Testing and fixes: ~3 hours
-- Documentation: ~2 hours
-
-Total: about 20 hours
+- In noisy environments, the mic might pick up character's audio (use headphones as workaround)

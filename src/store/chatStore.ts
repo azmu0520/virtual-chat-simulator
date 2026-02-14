@@ -1,7 +1,9 @@
 import { create } from "zustand";
 import type { VideoState, TranscriptEntry, ChatState } from "../types";
 import { v4 as uuidv4 } from "uuid";
+
 const generateUniqueId = () => uuidv4();
+
 interface ChatActions {
   setState: (state: VideoState) => void;
   startChat: () => void;

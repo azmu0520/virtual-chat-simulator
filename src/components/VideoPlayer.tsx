@@ -21,14 +21,11 @@ const VIDEO_FALLBACKS: Partial<Record<VideoState, VideoState>> = {
 
 const LOOPING_STATES: VideoState[] = ["idle", "listening"];
 
-// 🔧 States where character is speaking (has audio)
-const SPEAKING_STATES: VideoState[] = [
-  "greeting",
-  "response",
-  "weather",
-  "goodbye",
-  "fallback",
-  "prompt",
+// 🔧 UPDATED: Only block mic during greeting and goodbye
+// During other states (response, weather, etc), mic can stay active for natural conversation
+const BLOCKING_STATES: VideoState[] = [
+  "greeting", // Initial greeting - wait for it to finish
+  "goodbye", // Final goodbye - conversation ending
 ];
 
 export const VideoPlayer = () => {
@@ -58,13 +55,11 @@ export const VideoPlayer = () => {
     if (loadedVideos.current.has(state)) return;
 
     loadedVideos.current.add(state);
-    console.log(`✓ Video loaded: ${state} (${loadedVideos.current.size}/8)`);
 
     setLoadedCount(loadedVideos.current.size);
 
     if (loadedVideos.current.size === Object.keys(VIDEO_SOURCES).length) {
       setIsLoaded(true);
-      console.log("✓ All videos loaded!");
 
       const idleVideo = videoRefs.current["idle"];
       if (idleVideo && currentState === "idle") {
@@ -133,16 +128,14 @@ export const VideoPlayer = () => {
     return current;
   };
 
-  // 🔧 KEY FIX: Detect when character is speaking based on current state
+  // 🔧 KEY FIX: Only block mic during greeting and goodbye
   useEffect(() => {
     const effectiveState = getEffectiveState(currentState);
-    const isSpeaking = SPEAKING_STATES.includes(effectiveState);
+    const shouldBlock = BLOCKING_STATES.includes(effectiveState);
 
-    if (isSpeaking) {
-      console.log("🔊 Character speaking:", effectiveState);
+    if (shouldBlock) {
       setCharacterSpeaking(true);
     } else {
-      console.log("🔇 Character silent:", effectiveState);
       setCharacterSpeaking(false);
     }
   }, [currentState, setCharacterSpeaking, failedVideos]);
@@ -173,16 +166,15 @@ export const VideoPlayer = () => {
     });
   }, [currentState, isActive, isLoaded, failedVideos]);
 
-  // 🔧 ENHANCED: Handle video end events + stop speaking
+  // Handle video end events
   const handleVideoEnd = (state: VideoState) => {
-    console.log("⏹️ Video ended:", state);
-
     switch (state) {
       case "greeting":
         setState("listening");
         break;
       case "response":
       case "weather":
+      case "fallback":
         setState("listening");
         break;
       case "goodbye":
@@ -191,7 +183,6 @@ export const VideoPlayer = () => {
         }, 500);
         break;
       case "prompt":
-      case "fallback":
         setState("listening");
         break;
     }
